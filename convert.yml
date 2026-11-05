@@ -1,0 +1,61 @@
+name: Convert
+run-name: convert ${{ inputs.job_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: YouTube-link
+        required: true
+      format:
+        description: mp3 of mp4
+        required: true
+        default: mp3
+      job_id:
+        description: Uniek id van de pagina
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    env:
+      URL: ${{ inputs.url }}
+      FORMAT: ${{ inputs.format }}
+      JOB_ID: ${{ inputs.job_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Controleer invoer
+        run: |
+          [[ "$URL" =~ ^https://(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/ ]] || { echo "Geen YouTube-link"; exit 1; }
+          [[ "$FORMAT" == "mp3" || "$FORMAT" == "mp4" ]] || { echo "Ongeldig formaat"; exit 1; }
+          [[ "$JOB_ID" =~ ^[a-z0-9]{6,20}$ ]] || { echo "Ongeldig id"; exit 1; }
+
+      - name: Installeer yt-dlp en ffmpeg
+        run: |
+          python3 -m pip install -U "yt-dlp[default]"
+          sudo apt-get update -y && sudo apt-get install -y ffmpeg
+
+      - name: Zet om
+        run: |
+          mkdir out
+          COMMON=(--no-playlist --restrict-filenames --js-runtimes node -o "out/%(title).80B.%(ext)s")
+          if [ "$FORMAT" = "mp3" ]; then
+            yt-dlp "${COMMON[@]}" -f bestaudio/best -x --audio-format mp3 --audio-quality 192K -- "$URL"
+          else
+            yt-dlp "${COMMON[@]}" -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b" --merge-output-format mp4 -- "$URL"
+          fi
+          ls -lh out
+
+      - name: Publiceer als release
+        run: |
+          gh release create "dl-$JOB_ID" out/* --repo "$GITHUB_REPOSITORY" \
+            --title "dl-$JOB_ID" --notes "Automatisch gemaakt, wordt later verwijderd."
+
+      - name: Ruim oude downloads op (bewaar de laatste 10)
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep '^dl-' | tail -n +11 \
+            | xargs -r -I{} gh release delete {} --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
